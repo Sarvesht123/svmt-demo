@@ -8,11 +8,9 @@ terraform {
   backend "azurerm" {}
 }
 
-provider "azurerm" {
-  features {}
-}
+provider "azurerm" { features {} }
 
 resource "azurerm_resource_group" "example" {
-  name     = "rg-gha-dev"        # name of the RG to create (demo)
-  location = "UAE North"         # change region if needed
+  name     = "rg-gha-dev"
+  location = "UAE North"
 }
