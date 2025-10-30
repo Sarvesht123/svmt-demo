@@ -14,17 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Fail fast if OIDC inputs are missing or SP secrets exist
-      - name: Preflight (OIDC sanity)
-        shell: bash
-        run: |
-          set -euo pipefail
-          [ -n "${{ vars.AZURE_CLIENT_ID }}" ] || { echo "::error::Missing vars.AZURE_CLIENT_ID"; exit 1; }
-          [ -n "${{ vars.AZURE_TENANT_ID }}" ] || { echo "::error::Missing vars.AZURE_TENANT_ID"; exit 1; }
-          [ -n "${{ vars.AZURE_SUBSCRIPTION_ID }}" ] || { echo "::error::Missing vars.AZURE_SUBSCRIPTION_ID"; exit 1; }
-          [ -z "${{ secrets.AZURE_CREDENTIALS }}" ] || { echo "::error::Remove AZURE_CREDENTIALS (SP JSON) for OIDC"; exit 1; }
-          [ -z "${{ secrets.AZURE_CLIENT_SECRET }}" ] || { echo "::error::Remove AZURE_CLIENT_SECRET for OIDC"; exit 1; }
-
+      # OIDC login (no secrets)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -32,41 +22,36 @@ jobs:
           tenant-id:        ${{ vars.AZURE_TENANT_ID }}
           subscription-id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # ---- DIAGNOSTICS (kept before Terraform) ----
-      - name: Print Azure context & check Storage access
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "== az account show =="
-          az account show --output table
-          echo
-          echo "== backend.hcl =="
-          cat infra/envs/dev/backend.hcl || true
-          echo
-          # Extract values from backend.hcl (simple sed; assumes plain key = "value")
-          RG=$(sed -n 's/^resource_group_name *= *"\(.*\)".*/\1/p' infra/envs/dev/backend.hcl)
-          SA=$(sed -n 's/^storage_account_name *= *"\(.*\)".*/\1/p' infra/envs/dev/backend.hcl)
-          CT=$(sed -n 's/^container_name *= *"\(.*\)".*/\1/p' infra/envs/dev/backend.hcl)
-          echo "Parsed RG=$RG SA=$SA CT=$CT"
-          echo
-          echo "== Try listing the container (requires Blob Data role) =="
-          # This uses AAD login; no account key
-          az storage container show --name "$CT" --account-name "$SA" --auth-mode login --output table
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
           terraform_wrapper: false
 
+      # Init with OIDC env so backend uses SP token (NOT Azure CLI)
       - name: Terraform Init
         working-directory: infra/envs/dev
+        env:
+          ARM_CLIENT_ID:        ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:        ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:         "true"
         run: terraform init -backend-config=backend.hcl
 
       - name: Terraform Plan
         working-directory: infra/envs/dev
+        env:
+          ARM_CLIENT_ID:        ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:        ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:         "true"
         run: terraform plan -out=tfplan.bin
 
       - name: Terraform Apply
         working-directory: infra/envs/dev
+        env:
+          ARM_CLIENT_ID:        ${{ vars.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID:        ${{ vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC:         "true"
         run: terraform apply -auto-approve tfplan.bin
