@@ -11,26 +11,41 @@ jobs:
       id-token: write   # REQUIRED for OIDC
 
     steps:
-      # 1. Checkout repo
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Azure login using OIDC
+      # Preflight: make sure we're set up for OIDC and not SP
+      - name: Preflight (OIDC checks)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Git ref: $GITHUB_REF"
+          # Must have repo VARIABLES (not secrets) for OIDC
+          [ -n "${{ vars.AZURE_CLIENT_ID }}" ] || { echo "Missing vars.AZURE_CLIENT_ID"; exit 1; }
+          [ -n "${{ vars.AZURE_TENANT_ID }}" ] || { echo "Missing vars.AZURE_TENANT_ID"; exit 1; }
+          [ -n "${{ vars.AZURE_SUBSCRIPTION_ID }}" ] || { echo "Missing vars.AZURE_SUBSCRIPTION_ID"; exit 1; }
+          # Must NOT have SP creds present
+          if [ -n "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "::error::AZURE_CREDENTIALS secret is set (causes service principal auth). Delete it for OIDC."; exit 1;
+          fi
+          if [ -n "${{ secrets.AZURE_CLIENT_SECRET }}" ]; then
+            echo "::error::AZURE_CLIENT_SECRET secret is set (causes service principal auth). Delete it for OIDC."; exit 1;
+          fi
+
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
+          auth-type:       'id-token'   # FORCE OIDC
           client-id:        ${{ vars.AZURE_CLIENT_ID }}
           tenant-id:        ${{ vars.AZURE_TENANT_ID }}
           subscription-id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # 3. Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
           terraform_wrapper: false
 
-      # 4. Terraform Init / Plan / Apply
       - name: Terraform Init, Plan, and Apply
         shell: bash
         run: |
