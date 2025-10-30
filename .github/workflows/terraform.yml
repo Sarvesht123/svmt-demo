@@ -2,60 +2,40 @@ name: Terraform (deploy)
 
 on:
   workflow_dispatch:
-    inputs:
-      env:
-        description: 'Environment to deploy'
-        required: true
-        type: choice
-        options:
-          - dev
-  # Optional: uncomment this to auto-run on pushes to main
-  # push:
-  #   branches: [ main ]
 
 jobs:
-  plan-and-apply:
+  deploy:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env }}
     permissions:
       contents: read
       id-token: write   # REQUIRED for OIDC
 
-    defaults:
-      run:
-        working-directory: infra/envs/${{ inputs.env }}
-
     steps:
+      # 1. Checkout repo
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight: check required vars for OIDC
-        shell: bash
-        run: |
-          [ -n "${{ vars.AZURE_CLIENT_ID }}" ] || { echo "Missing vars.AZURE_CLIENT_ID"; exit 1; }
-          [ -n "${{ vars.AZURE_TENANT_ID }}" ] || { echo "Missing vars.AZURE_TENANT_ID"; exit 1; }
-          [ -n "${{ vars.AZURE_SUBSCRIPTION_ID }}" ] || { echo "Missing vars.AZURE_SUBSCRIPTION_ID"; exit 1; }
-
-      - name: Azure login (OIDC)
+      # 2. Azure login using OIDC
+      - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id:        ${{ vars.AZURE_CLIENT_ID }}
           tenant-id:        ${{ vars.AZURE_TENANT_ID }}
           subscription-id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          # IMPORTANT: do NOT pass "creds" or "client-secret" for OIDC
 
+      # 3. Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
           terraform_wrapper: false
 
-      - name: Terraform init (remote state)
-        run: terraform init -backend-config=backend.hcl
-
-      - name: Terraform plan
-        run: terraform plan -out=tfplan.bin
-
-      - name: Terraform apply (publish)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: terraform apply -auto-approve tfplan.bin
+      # 4. Terraform Init / Plan / Apply
+      - name: Terraform Init, Plan, and Apply
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd infra/envs/dev
+          terraform init -backend-config=backend.hcl
+          terraform plan -out=tfplan.bin
+          terraform apply -auto-approve tfplan.bin
