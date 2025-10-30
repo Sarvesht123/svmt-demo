@@ -14,17 +14,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Optional: sanity checks to avoid SP mode
-      - name: Preflight (OIDC)
+      # Fail fast if OIDC inputs are missing or SP secrets exist
+      - name: Preflight (OIDC sanity)
         shell: bash
         run: |
           set -euo pipefail
-          [ -n "${{ vars.AZURE_CLIENT_ID }}" ] || { echo "Missing vars.AZURE_CLIENT_ID"; exit 1; }
-          [ -n "${{ vars.AZURE_TENANT_ID }}" ] || { echo "Missing vars.AZURE_TENANT_ID"; exit 1; }
-          [ -n "${{ vars.AZURE_SUBSCRIPTION_ID }}" ] || { echo "Missing vars.AZURE_SUBSCRIPTION_ID"; exit 1; }
-          # Ensure we’re not accidentally using SP creds:
-          [ -z "${{ secrets.AZURE_CREDENTIALS }}" ] || { echo "Remove AZURE_CREDENTIALS secret for OIDC"; exit 1; }
-          [ -z "${{ secrets.AZURE_CLIENT_SECRET }}" ] || { echo "Remove AZURE_CLIENT_SECRET secret for OIDC"; exit 1; }
+          [ -n "${{ vars.AZURE_CLIENT_ID }}" ] || { echo "::error::Missing vars.AZURE_CLIENT_ID"; exit 1; }
+          [ -n "${{ vars.AZURE_TENANT_ID }}" ] || { echo "::error::Missing vars.AZURE_TENANT_ID"; exit 1; }
+          [ -n "${{ vars.AZURE_SUBSCRIPTION_ID }}" ] || { echo "::error::Missing vars.AZURE_SUBSCRIPTION_ID"; exit 1; }
+          [ -z "${{ secrets.AZURE_CREDENTIALS }}" ] || { echo "::error::Remove AZURE_CREDENTIALS (SP JSON) for OIDC"; exit 1; }
+          [ -z "${{ secrets.AZURE_CLIENT_SECRET }}" ] || { echo "::error::Remove AZURE_CLIENT_SECRET for OIDC"; exit 1; }
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -32,7 +31,27 @@ jobs:
           client-id:        ${{ vars.AZURE_CLIENT_ID }}
           tenant-id:        ${{ vars.AZURE_TENANT_ID }}
           subscription-id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          # NOTE: no 'auth-type', no 'creds', no 'client-secret'
+
+      # ---- DIAGNOSTICS (kept before Terraform) ----
+      - name: Print Azure context & check Storage access
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "== az account show =="
+          az account show --output table
+          echo
+          echo "== backend.hcl =="
+          cat infra/envs/dev/backend.hcl || true
+          echo
+          # Extract values from backend.hcl (simple sed; assumes plain key = "value")
+          RG=$(sed -n 's/^resource_group_name *= *"\(.*\)".*/\1/p' infra/envs/dev/backend.hcl)
+          SA=$(sed -n 's/^storage_account_name *= *"\(.*\)".*/\1/p' infra/envs/dev/backend.hcl)
+          CT=$(sed -n 's/^container_name *= *"\(.*\)".*/\1/p' infra/envs/dev/backend.hcl)
+          echo "Parsed RG=$RG SA=$SA CT=$CT"
+          echo
+          echo "== Try listing the container (requires Blob Data role) =="
+          # This uses AAD login; no account key
+          az storage container show --name "$CT" --account-name "$SA" --auth-mode login --output table
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -40,11 +59,14 @@ jobs:
           terraform_version: 1.8.5
           terraform_wrapper: false
 
-      - name: Terraform Init / Plan / Apply
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd infra/envs/dev
-          terraform init -backend-config=backend.hcl
-          terraform plan -out=tfplan.bin
-          terraform apply -auto-approve tfplan.bin
+      - name: Terraform Init
+        working-directory: infra/envs/dev
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Terraform Plan
+        working-directory: infra/envs/dev
+        run: terraform plan -out=tfplan.bin
+
+      - name: Terraform Apply
+        working-directory: infra/envs/dev
+        run: terraform apply -auto-approve tfplan.bin
