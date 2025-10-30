@@ -14,31 +14,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Preflight: make sure we're set up for OIDC and not SP
-      - name: Preflight (OIDC checks)
+      # Optional: sanity checks to avoid SP mode
+      - name: Preflight (OIDC)
         shell: bash
         run: |
           set -euo pipefail
-          echo "Git ref: $GITHUB_REF"
-          # Must have repo VARIABLES (not secrets) for OIDC
           [ -n "${{ vars.AZURE_CLIENT_ID }}" ] || { echo "Missing vars.AZURE_CLIENT_ID"; exit 1; }
           [ -n "${{ vars.AZURE_TENANT_ID }}" ] || { echo "Missing vars.AZURE_TENANT_ID"; exit 1; }
           [ -n "${{ vars.AZURE_SUBSCRIPTION_ID }}" ] || { echo "Missing vars.AZURE_SUBSCRIPTION_ID"; exit 1; }
-          # Must NOT have SP creds present
-          if [ -n "${{ secrets.AZURE_CREDENTIALS }}" ]; then
-            echo "::error::AZURE_CREDENTIALS secret is set (causes service principal auth). Delete it for OIDC."; exit 1;
-          fi
-          if [ -n "${{ secrets.AZURE_CLIENT_SECRET }}" ]; then
-            echo "::error::AZURE_CLIENT_SECRET secret is set (causes service principal auth). Delete it for OIDC."; exit 1;
-          fi
+          # Ensure we’re not accidentally using SP creds:
+          [ -z "${{ secrets.AZURE_CREDENTIALS }}" ] || { echo "Remove AZURE_CREDENTIALS secret for OIDC"; exit 1; }
+          [ -z "${{ secrets.AZURE_CLIENT_SECRET }}" ] || { echo "Remove AZURE_CLIENT_SECRET secret for OIDC"; exit 1; }
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          auth-type:       'id-token'   # FORCE OIDC
           client-id:        ${{ vars.AZURE_CLIENT_ID }}
           tenant-id:        ${{ vars.AZURE_TENANT_ID }}
           subscription-id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          # NOTE: no 'auth-type', no 'creds', no 'client-secret'
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -46,7 +40,7 @@ jobs:
           terraform_version: 1.8.5
           terraform_wrapper: false
 
-      - name: Terraform Init, Plan, and Apply
+      - name: Terraform Init / Plan / Apply
         shell: bash
         run: |
           set -euo pipefail
